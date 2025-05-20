@@ -160,7 +160,7 @@ data = [
      q^6 - 6*q^5 + 15*q^4 - 20*q^3 + 15*q^2 - 6*q + 1]
 ]
 
-for n in range(2, 7):
+for n in range(2, 14):
     print(f"n={n}")
     for i, p in enumerate(data[n]):
         print(f"{i}: {p}")

@@ -8,9 +8,9 @@ root = logging.getLogger()
 root.setLevel(logging.DEBUG)
 
 handler = logging.StreamHandler(sys.stdout)
-handler.setLevel(logging.INFO)
+# handler.setLevel(logging.INFO)
 # Replace the above with this to disable printing steps:
-# handler.setLevel(logging.WARNING)
+handler.setLevel(logging.WARNING)
 
 root.addHandler(handler)
 
@@ -32,6 +32,8 @@ def dump_args(func):
         logging.info("┃ "*_depth + f"{func.__qualname__} ( {func_args_str} )")
         _depth += 1
         result = func(*args, **kwargs)
+        if inspect.isgenerator(result):
+            result = list(result)
         logging.info("┃ "*(_depth-1) + "┗ " + f"return {result!s}")
         _depth -= 1
         return result
@@ -40,8 +42,9 @@ def dump_args(func):
 
 S.<q, t> = ZZ['q', 't']
 
+# A = (Q, E, B, R) algebraic data
 # Q is a set of variables
-# E is a list of pair of lists (=0, !=0)
+# E is a pair ([=0], {!=0}) consisting of a list and a set
 # B is a list of ints
 # R is a dict, keys are triples, values are lists of variables
 
@@ -53,29 +56,87 @@ def split_into_cases(A):
             if a in E[1]:
                 continue
 
-            E1 = (E[0].copy(), E[1] + [a])
+            E1 = (E[0].copy(), E[1].union({a}))
             A1 = (Q, E1, B, R)
-
-            Q2 = Q.copy()
-            Q2.remove(a)
 
             yield from split_into_cases(A1)
 
-            E2 = ([simplify(expr.subs(a==0)) for expr in E[0]], E[1].copy())
+            Q2 = Q.copy()
+            E2 = (E[0] + [a], E[1].copy())
             R2 = R.copy()
-            to_delete = []
-            for k, v in R.items():
-                if a in v:
-                    to_delete.append(k)
-            for k in to_delete:
-                del R2[k]
+            A2 = reduce_alg_data((Q2, E2, B, R2))
 
-            A2 = (Q2, E2, B, R2)
+            if A2 is not None:
+                yield from split_into_cases(A2)
 
-            yield from split_into_cases(A2)
             return
 
-    yield A
+    Q1 = Q.copy()
+    E1 = (E[0].copy(), E[1].copy())
+    R1 = R.copy()
+    A1 = reduce_alg_data((Q1, E1, B, R1))
+
+    if A1 is not None:
+        yield A1
+    return
+
+
+@dump_args
+def reduce_alg_data(A):
+    # Reduce the number of variables in the algebraic data. Modifies A
+    Q, E, B, R = A
+
+    for expr in E[0]:
+        if expr.is_constant() and not expr.is_zero():
+            return None
+
+    while SR.zero() in E[0]:
+        E[0].remove(SR.zero())
+
+    for expr in E[0]:
+        variables = expr.variables()
+        if len(variables) == 1:
+            a = variables[0]
+            sol = solve(expr, a)
+            if sol == [a == 0]:
+                if a in E[1]:
+                    return None
+                Q.remove(a)
+                E = ([simplify(expr.subs(a==0)) for expr in E[0]], E[1])
+                to_delete = []
+                for k, v in R.items():
+                    if a in v:
+                        to_delete.append(k)
+                for k in to_delete:
+                    del R[k]
+                return reduce_alg_data((Q, E, B, R))
+
+            elif sol == [a == 1]:
+                Q.remove(a)
+                E = ([simplify(expr.subs(a==1)) for expr in E[0]], E[1])
+                if a in E[1]:
+                    E[1].remove(a)
+                for k, v in R.items():
+                    while a in v:
+                        v.remove(a)
+                return reduce_alg_data((Q, E, B, R))
+
+        elif len(variables) == 2:
+            a, b = variables
+            if solve(expr, a) == [a == b]:
+                Q.remove(a)
+                E = ([simplify(expr.subs(a==b)) for expr in E[0]], E[1])
+                if a in E[1]:
+                    E[1].remove(a)
+                    E[1].add(b)
+                for k, v in R.items():
+                    for i in range(len(v)):
+                        if v[i] == a:
+                            v[i] = b
+                return reduce_alg_data((Q, E, B, R))
+
+    return A
+
 
 @dump_args
 def aggregate(*args):
@@ -85,34 +146,39 @@ def aggregate(*args):
 def general(A):
     Q, E, B, R = A
     if len(R) == 0:
-        system = solve(E[0], tuple(Q), solution_dict=True)
-        if len(system) == 0:
-            return [[S.zero()]]
-        elif len(system) == 1:
-            system = system[0]
-            variables = set(v for expr in system.values() for v in expr.variables())
-            points = []
-            # Interpolate using first 10 primes, improve this
-            for p in Primes()[:10]:
-                cnt = 0
-
-                for pt in itertools.product(range(p), repeat=len(variables)):
-                    pair = {k: v for k, v in zip(variables, pt)}
-                    pair2 = {k: system[k].subs(pair) if k in system else pair[k] for k in Q}
-                    ok = True
-                    for expr in E[1]:
-                        if int(expr.subs(pair2)) % p == 0:
-                            ok = False
-                            break
-                    if ok:
-                        cnt += 1
-                points.append((p, cnt))
-
-            f = q^len(B) * PolynomialRing(QQ, 'x').lagrange_polynomial(points)(q)
-
+        if len(E[0]) == 0:
+            f = q^len(B) * (q-1)^len(E[1])
             return [[f]]
         else:
-            return [[S.zero(), [Q, E, 0, len(B), 0]]]
+            used_vars = set().union(*[set(expr.variables()) for expr in E[0]])
+            system = solve(E[0], tuple(used_vars), solution_dict=True)
+            if len(system) == 0:
+                return [[S.zero()]]
+            elif len(system) == 1:
+                system = system[0]
+                variables = set(v for expr in system.values() for v in expr.variables())
+                points = []
+                # Interpolate using first 10 primes, improve this
+                for p in Primes()[:10]:
+                    cnt = 0
+
+                    for pt in itertools.product(range(p), repeat=len(variables)):
+                        pair = {k: v for k, v in zip(variables, pt)}
+                        pair2 = {k: system[k].subs(pair) if k in system else pair[k] for k in used_vars}
+                        ok = True
+                        for expr in E[1]:
+                            if expr in used_vars and int(expr.subs(pair2)) % p == 0:
+                                ok = False
+                                break
+                        if ok:
+                            cnt += 1
+                    points.append((p, cnt))
+
+                f = q^len(B) * (q-1)^(len(Q)-len(used_vars)) * PolynomialRing(QQ, 'x').lagrange_polynomial(points)(q)
+
+                return [[f]]
+            else:
+                return [[S.zero(), [Q, E, 0, len(B), 0]]]
 
     z = B[-1]
     assert all((u, z, v) not in R and (z, u, v) not in R for u in B for v in B)
@@ -344,13 +410,14 @@ def alg_data_U(n):
             for k in range(j+1, n):
                 R[(M[i][j], M[j][k], M[i][k])] = []
 
-    return (set(), ([], []), list(range(ctr)), R)
+    return (set(), ([], set()), list(range(ctr)), R)
 
 
 if __name__ == "__main__":
-    for n in range(2, 7):
+    for n in range(2, 14):
         print(f"n={n}")
         out = general(alg_data_U(n))
+        print(out)
         ans = {}
         for k, v in out[0][0].monomial_coefficients().items():
             if k[1] not in ans:
