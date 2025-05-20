@@ -1,5 +1,4 @@
 import itertools
-from enum import Enum
 import inspect
 from functools import wraps
 import logging
@@ -9,9 +8,9 @@ root = logging.getLogger()
 root.setLevel(logging.DEBUG)
 
 handler = logging.StreamHandler(sys.stdout)
-#handler.setLevel(logging.INFO)
+handler.setLevel(logging.INFO)
 # Replace the above with this to disable printing steps:
-handler.setLevel(logging.WARNING)
+# handler.setLevel(logging.WARNING)
 
 root.addHandler(handler)
 
@@ -41,21 +40,8 @@ def dump_args(func):
 
 S.<q, t> = ZZ['q', 't']
 
-class Restriction(Enum):
-    ZERO = 0
-    NONZERO = 1
-
-    def __str__(self):
-        if self == Restriction.ZERO:
-            return "0="
-        else:
-            return "0!="
-
-    def __repr__(self):
-        return self.__str__()
-
 # Q is a set of variables
-# E is a list of tuples (Restriction, polynomial)
+# E is a list of pair of lists (=0, !=0)
 # B is a list of ints
 # R is a dict, keys are triples, values are lists of variables
 
@@ -64,31 +50,32 @@ def split_into_cases(A):
     Q, E, B, R = A
     for l in R.values():
         for a in l:
-            if not (Restriction.NONZERO, a) in E:
-                E1 = E + [(Restriction.NONZERO, a)]
-                A1 = (Q, E1, B, R)
+            if a in E[1]:
+                continue
 
-                Q2 = Q.copy()
-                Q2.remove(a)
+            E1 = (E[0].copy(), E[1] + [a])
+            A1 = (Q, E1, B, R)
 
-                E2 = E.copy()
-                for i in range(len(E2)):
-                    if E2[i][0] == Restriction.ZERO:
-                        E2[i] = (Restriction.ZERO, simplify(E2[i][1].subs(a==0)))
+            Q2 = Q.copy()
+            Q2.remove(a)
 
-                R2 = R.copy()
-                to_delete = []
-                for k, v in R.items():
-                    if a in v:
-                        to_delete.append(k)
-                for k in to_delete:
-                    del R2[k]
+            yield from split_into_cases(A1)
 
-                A2 = (Q2, E2, B, R2)
+            E2 = ([simplify(expr.subs(a==0)) for expr in E[0]], E[1].copy())
+            R2 = R.copy()
+            to_delete = []
+            for k, v in R.items():
+                if a in v:
+                    to_delete.append(k)
+            for k in to_delete:
+                del R2[k]
 
-                return split_into_cases(A1) + split_into_cases(A2)
+            A2 = (Q2, E2, B, R2)
 
-    return [A]
+            yield from split_into_cases(A2)
+            return
+
+    yield A
 
 @dump_args
 def aggregate(*args):
@@ -98,14 +85,14 @@ def aggregate(*args):
 def general(A):
     Q, E, B, R = A
     if len(R) == 0:
-        system = solve([expr for restr, expr in E if restr == Restriction.ZERO], tuple(Q), solution_dict=True)
+        system = solve(E[0], tuple(Q), solution_dict=True)
         if len(system) == 0:
             return [[S.zero()]]
         elif len(system) == 1:
             system = system[0]
             variables = set(v for expr in system.values() for v in expr.variables())
             points = []
-            # Interpolate using first 6 primes, improve this
+            # Interpolate using first 10 primes, improve this
             for p in Primes()[:10]:
                 cnt = 0
 
@@ -113,11 +100,10 @@ def general(A):
                     pair = {k: v for k, v in zip(variables, pt)}
                     pair2 = {k: system[k].subs(pair) if k in system else pair[k] for k in Q}
                     ok = True
-                    for t, expr in E:
-                        if t == Restriction.NONZERO:
-                            if int(expr.subs(pair2)) % p == 0:
-                                ok = False
-                                break
+                    for expr in E[1]:
+                        if int(expr.subs(pair2)) % p == 0:
+                            ok = False
+                            break
                     if ok:
                         cnt += 1
                 points.append((p, cnt))
@@ -188,7 +174,7 @@ def type_b(A, z):
             return prod(R[y, x, z])
 
         Q1 = Q.copy()
-        E1 = E.copy()
+        E1 = (E[0].copy(), E[1].copy())
 
         B1 = B.copy()
         B1.remove(X[-1])
@@ -216,7 +202,7 @@ def type_b(A, z):
                                 duvw = SR.temp_var()
                                 R1[(u, v, w)] = [duvw]
                                 Q1.add(duvw)
-                                E1.append((Restriction.ZERO, duvw - expr))
+                                E1[0].append(duvw - expr)
                 else:
                     if w in X:
                         # Case 7
@@ -235,7 +221,7 @@ def type_b(A, z):
                                 duvw = SR.temp_var()
                                 R1[(u, v, w)] = [duvw]
                                 Q1.add(duvw)
-                                E1.append((Restriction.ZERO, duvw - expr))
+                                E1[0].append(duvw - expr)
             else:
                 if v in X:
                     if w in X:
@@ -255,7 +241,7 @@ def type_b(A, z):
                                 duvw = SR.temp_var()
                                 R1[(u, v, w)] = [duvw]
                                 Q1.add(duvw)
-                                E1.append((Restriction.ZERO, duvw - expr))
+                                E1[0].append(duvw - expr)
                 else:
                     if w in X:
                         # Case 5
@@ -263,7 +249,7 @@ def type_b(A, z):
                             duvw = SR.temp_var()
                             R1[(u, v, w)] = [duvw]
                             Q1.add(duvw)
-                            E1.append((Restriction.ZERO, duvw*c(X[-1]) - P(u, v, w)))
+                            E1[0].append(duvw*c(X[-1]) - P(u, v, w))
                     else:
                         # Case 1
                         if (u, v, w) in R:
@@ -314,7 +300,7 @@ def type_b(A, z):
 
         b = SR.temp_var(k)
         Q1 = Q.union(b)
-        E1 = E.copy()
+        E1 = (E[0].copy(), E[1].copy())
 
         R1 = dict()
         for u, v, w in itertools.product(B1, repeat=3):
@@ -330,7 +316,7 @@ def type_b(A, z):
                         duvw = SR.temp_var()
                         R1[(u, v, w)] = [duvw]
                         Q1.add(duvw)
-                        E1.append((Restriction.ZERO, duvw - expr))
+                        E1[0].append(duvw - expr)
             else:
                 if (u, v, w) in R:
                     R1[(u, v, w)] = R[(u, v, w)]
@@ -358,11 +344,11 @@ def alg_data_U(n):
             for k in range(j+1, n):
                 R[(M[i][j], M[j][k], M[i][k])] = []
 
-    return (set(), [], list(range(ctr)), R)
+    return (set(), ([], []), list(range(ctr)), R)
 
 
 if __name__ == "__main__":
-    for n in range(2, 6):
+    for n in range(2, 7):
         print(f"n={n}")
         out = general(alg_data_U(n))
         ans = {}
