@@ -27,7 +27,7 @@ def dump_args(func):
     @wraps(func)
     def wrapper(*args, **kwargs):
         global _depth
-        
+
         func_args = inspect.signature(func).bind(*args, **kwargs).arguments
         func_args_str = ", ".join(map("{0[0]} = {0[1]!s}".format, func_args.items()))
         logging.info("┃ "*_depth + f"{func.__qualname__} ( {func_args_str} )")
@@ -83,13 +83,13 @@ def split_into_cases(A):
                         to_delete.append(k)
                 for k in to_delete:
                     del R2[k]
-                    
+
                 A2 = (Q2, E2, B, R2)
 
                 return split_into_cases(A1) + split_into_cases(A2)
 
     return [A]
-    
+
 @dump_args
 def aggregate(*args):
     return [[sum((l[0][0] for l in args), S.zero())] + sum((l[0][1:] for l in args), [])] + sum((l[1:] for l in args), [])
@@ -108,7 +108,7 @@ def general(A):
             # Interpolate using first 6 primes, improve this
             for p in Primes()[:10]:
                 cnt = 0
-                
+
                 for pt in itertools.product(range(p), repeat=len(variables)):
                     pair = {k: v for k, v in zip(variables, pt)}
                     pair2 = {k: system[k].subs(pair) if k in system else pair[k] for k in Q}
@@ -121,23 +121,22 @@ def general(A):
                     if ok:
                         cnt += 1
                 points.append((p, cnt))
-                
+
             f = q^len(B) * PolynomialRing(QQ, 'x').lagrange_polynomial(points)(q)
-            
+
             return [[f]]
         else:
             return [[S.zero(), [Q, E, 0, len(B), 0]]]
-            
-        
+
     z = B[-1]
     assert all((u, z, v) not in R and (z, u, v) not in R for u in B for v in B)
-    
+
     B1 = B.copy()
     B1.remove(z)
 
     R1 = {k: v for k, v in R.items() if z not in k}
     A1 = (Q, E, B1, R1)
-    
+
     O1 = general(A1)
     O2 = type_b(A, z)
 
@@ -158,7 +157,7 @@ def type_b(A, z):
         logging.info("┃ "*_depth + "Type B Step 1")
         B1 = B.copy()
         B1.remove(z)
-    
+
         R1 = {k: v for k, v in R.items() if z not in k}
 
         A1 = (Q, E, B1, R1)
@@ -194,7 +193,7 @@ def type_b(A, z):
         B1 = B.copy()
         B1.remove(X[-1])
         B1.remove(y)
-        
+
         R1 = dict()
         # Loop could be optimized
         for u, v, w in itertools.product(B1, repeat=3):
@@ -303,11 +302,11 @@ def type_b(A, z):
         logging.info("┃ "*_depth + "Type B Step 3")
         y = y_best
         L = L_best
-        
+
         W = L.copy()
         if z in W:
             W.remove(z)
-        
+
         k = len(W)
         B1 = [x for x in B if x not in L]
         if z not in B1:
@@ -316,7 +315,7 @@ def type_b(A, z):
         b = SR.temp_var(k)
         Q1 = Q.union(b)
         E1 = E.copy()
-        
+
         R1 = dict()
         for u, v, w in itertools.product(B1, repeat=3):
             if w == z:
@@ -335,7 +334,7 @@ def type_b(A, z):
             else:
                 if (u, v, w) in R:
                     R1[(u, v, w)] = R[(u, v, w)]
-        
+
         A1 = (Q1, E1, B1, R1)
         return aggregate(*[type_b(As, z) for As in split_into_cases(A1)])
 
@@ -353,7 +352,7 @@ def alg_data_U(n):
             ctr += 1
 
     R = dict()
-    
+
     for i in range(n):
         for j in range(i+1, n):
             for k in range(j+1, n):
