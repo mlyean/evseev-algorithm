@@ -46,13 +46,13 @@ S.<q, t> = ZZ['q', 't']
 # Q is a set of variables
 # E is a pair ([=0], {!=0}) consisting of a list and a set
 # B is a list of ints
-# R is a dict, keys are triples, values are lists of variables
+# R is a dict, keys are triples, values are monomials
 
 @dump_args
 def split_into_cases(A):
     Q, E, B, R = A
-    for l in R.values():
-        for a in l:
+    for expr in R.values():
+        for a in expr.variables():
             if a in E[1]:
                 continue
 
@@ -81,6 +81,10 @@ def split_into_cases(A):
     return
 
 
+def is_monomial(expr):
+    return all(f.is_symbol() or f.is_constant() for f, _ in expr.factor_list())
+
+
 @dump_args
 def reduce_alg_data(A):
     # Reduce the number of variables in the algebraic data. Modifies A
@@ -93,46 +97,43 @@ def reduce_alg_data(A):
     while SR.zero() in E[0]:
         E[0].remove(SR.zero())
 
+    success = False
     for expr in E[0]:
         variables = expr.variables()
-        if len(variables) == 1:
-            a = variables[0]
-            sol = solve(expr, a)
-            if sol == [a == 0]:
-                if a in E[1]:
-                    return None
+        for a in variables:
+            sols = solve(expr, a, solution_dict=True)
+            if len(sols) != 1:
+                continue
+            sol = sols[0]
+            lhs, rhs = list(sol.items())[0]
+            assert lhs == a
+            if is_monomial(rhs) and all(w in Q for w in rhs.variables()):
                 Q.remove(a)
-                E = ([simplify(expr.subs(a==0)) for expr in E[0]], E[1])
-                to_delete = []
-                for k, v in R.items():
-                    if a in v:
-                        to_delete.append(k)
-                for k in to_delete:
+
+                E1_new = E[1]
+                if a in E[1]:
+                    if rhs == 0:
+                        return None
+                    E1_new.remove(a)
+                    for w in rhs.variables():
+                        E1_new.add(w)
+
+                E0_new = []
+                for expr2 in E[0]:
+                    expr3 = simplify(expr2.subs(a==rhs))
+                    if expr3 != 0:
+                        E0_new.append(expr3)
+
+                E = (E0_new, E1_new)
+
+                to_remove = []
+                for k in R:
+                    R[k] = simplify(R[k].subs(a==rhs))
+                    if R[k] == 0:
+                        to_remove.append(k)
+                for k in to_remove:
                     del R[k]
-                return reduce_alg_data((Q, E, B, R))
 
-            elif sol == [a == 1]:
-                Q.remove(a)
-                E = ([simplify(expr.subs(a==1)) for expr in E[0]], E[1])
-                if a in E[1]:
-                    E[1].remove(a)
-                for k, v in R.items():
-                    while a in v:
-                        v.remove(a)
-                return reduce_alg_data((Q, E, B, R))
-
-        elif len(variables) == 2:
-            a, b = variables
-            if solve(expr, a) == [a == b]:
-                Q.remove(a)
-                E = ([simplify(expr.subs(a==b)) for expr in E[0]], E[1])
-                if a in E[1]:
-                    E[1].remove(a)
-                    E[1].add(b)
-                for k, v in R.items():
-                    for i in range(len(v)):
-                        if v[i] == a:
-                            v[i] = b
                 return reduce_alg_data((Q, E, B, R))
 
     return A
@@ -201,8 +202,8 @@ def type_b(A, z):
 
     def P(v1, v2, v3):
         if not (v1, v2, v3) in R:
-            return 0
-        return prod(R[v1, v2, v3])
+            return SR.zero()
+        return R[(v1, v2, v3)]
 
     # Step 1
     if not any(k[2] == z for k in R):
@@ -237,7 +238,7 @@ def type_b(A, z):
 
         def c(x):
             #assert x in X
-            return prod(R[y, x, z])
+            return R[(y, x, z)]
 
         Q1 = Q.copy()
         E1 = (E[0].copy(), E[1].copy())
@@ -254,19 +255,16 @@ def type_b(A, z):
                     if w in X:
                         # Case 8
                         if (u, v, w) in R and (y, X[-1], z) in R:
-                            R1[(u, v, w)] = R[(u, v, w)] + R[(y, X[-1], z)]
+                            R1[(u, v, w)] = simplify(R[(u, v, w)] * R[(y, X[-1], z)])
                     else:
                         # Case 4
-                        expr = c(X[-1])^2 * P(u,v,w) - c(u)*c(X[-1])*P(X[-1],v,w) - c(v)*c(X[-1])*P(u,X[-1],w) + c(u)*c(v)*P(X[-1],X[-1],w)
+                        expr = simplify(c(X[-1])^2 * P(u,v,w) - c(u)*c(X[-1])*P(X[-1],v,w) - c(v)*c(X[-1])*P(u,X[-1],w) + c(u)*c(v)*P(X[-1],X[-1],w))
                         if expr != 0:
-                            factors = expr.factor_list()
-                            if expr == 1:
-                                R1[(u, v, w)] = []
-                            elif all(f in Q for f, m in factors):
-                                R1[(u, v, w)] = [f for f, m in factors for _ in range(m)]
+                            if is_monomial(expr):
+                                R1[(u, v, w)] = expr
                             else:
                                 duvw = SR.temp_var()
-                                R1[(u, v, w)] = [duvw]
+                                R1[(u, v, w)] = duvw
                                 Q1.add(duvw)
                                 E1[0].append(duvw - expr)
                 else:
@@ -276,16 +274,13 @@ def type_b(A, z):
                             R1[(u, v, w)] = R[(u, v, w)]
                     else:
                         # Case 3
-                        expr = c(X[-1])*P(u,v,w) - c(u)*P(X[-1],v,w)
+                        expr = simplify(c(X[-1])*P(u,v,w) - c(u)*P(X[-1],v,w))
                         if expr != 0:
-                            factors = expr.factor_list()
-                            if expr == 1:
-                                R1[(u, v, w)] = []
-                            elif all(f in Q for f, m in factors):
-                                R1[(u, v, w)] = [f for f, m in factors for _ in range(m)]
+                            if is_monomial(expr):
+                                R1[(u, v, w)] = expr
                             else:
                                 duvw = SR.temp_var()
-                                R1[(u, v, w)] = [duvw]
+                                R1[(u, v, w)] = duvw
                                 Q1.add(duvw)
                                 E1[0].append(duvw - expr)
             else:
@@ -296,16 +291,13 @@ def type_b(A, z):
                             R1[(u, v, w)] = R[(u, v, w)]
                     else:
                         # Case 2
-                        expr = c(X[-1])*P(u,v,w) - c(v)*P(u,X[-1],w)
+                        expr = simplify(c(X[-1])*P(u,v,w) - c(v)*P(u,X[-1],w))
                         if expr != 0:
-                            factors = expr.factor_list()
-                            if expr == 1:
-                                R1[(u, v, w)] = []
-                            elif all(f in Q for f, m in factors):
-                                R1[(u, v, w)] = [f for f, m in factors for _ in range(m)]
+                            if is_monomial(expr):
+                                R1[(u, v, w)] = expr
                             else:
                                 duvw = SR.temp_var()
-                                R1[(u, v, w)] = [duvw]
+                                R1[(u, v, w)] = duvw
                                 Q1.add(duvw)
                                 E1[0].append(duvw - expr)
                 else:
@@ -313,7 +305,7 @@ def type_b(A, z):
                         # Case 5
                         if (u, v, w) in R:
                             duvw = SR.temp_var()
-                            R1[(u, v, w)] = [duvw]
+                            R1[(u, v, w)] = duvw
                             Q1.add(duvw)
                             E1[0].append(duvw*c(X[-1]) - P(u, v, w))
                     else:
@@ -322,7 +314,9 @@ def type_b(A, z):
                             R1[(u, v, w)] = R[(u, v, w)]
 
         A1 = reduce_alg_data((Q1, E1, B1, R1))
-        assert A1 is not None
+        if A1 is None:
+            return [[S.zero()]]
+
         O = aggregate(*[type_b(As, z) for As in split_into_cases(A1)])
 
         O[0][0] *= t
@@ -372,16 +366,13 @@ def type_b(A, z):
         R1 = dict()
         for u, v, w in itertools.product(B1, repeat=3):
             if w == z:
-                expr = P(u, v, z) + sum(b[i]*P(u, v, W[i]) for i in range(k))
+                expr = simplify(P(u, v, z) + sum(b[i]*P(u, v, W[i]) for i in range(k)))
                 if expr != 0:
-                    factors = expr.factor_list()
-                    if expr == 1:
-                        R1[(u, v, w)] = []
-                    elif all(f in Q for f, m in factors):
-                        R1[(u, v, w)] = [f for f, m in factors for _ in range(m)]
+                    if is_monomial(expr):
+                        R1[(u, v, w)] = expr
                     else:
                         duvw = SR.temp_var()
-                        R1[(u, v, w)] = [duvw]
+                        R1[(u, v, w)] = duvw
                         Q1.add(duvw)
                         E1[0].append(duvw - expr)
             else:
@@ -409,7 +400,7 @@ def alg_data_U(n):
     for i in range(n):
         for j in range(i+1, n):
             for k in range(j+1, n):
-                R[(M[i][j], M[j][k], M[i][k])] = []
+                R[(M[i][j], M[j][k], M[i][k])] = SR.one()
 
     return (set(), ([], set()), list(range(ctr)), R)
 
@@ -426,3 +417,4 @@ if __name__ == "__main__":
             ans[k[1]] += v * q^k[0]
         for k, v in sorted(ans.items()):
             print(f"{k}: {v}")
+        clear_vars()
