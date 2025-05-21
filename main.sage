@@ -321,7 +321,8 @@ def type_b(A, z):
                         if (u, v, w) in R:
                             R1[(u, v, w)] = R[(u, v, w)]
 
-        A1 = (Q1, E1, B1, R1)
+        A1 = reduce_alg_data((Q1, E1, B1, R1))
+        assert A1 is not None
         O = aggregate(*[type_b(As, z) for As in split_into_cases(A1)])
 
         O[0][0] *= t
