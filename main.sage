@@ -78,11 +78,10 @@ def split_into_cases(A):
 
     if A1 is not None:
         yield A1
-    return
 
 
 def is_monomial(expr):
-    return all(f.is_symbol() or f.is_constant() for f, _ in expr.factor_list())
+    return all(m >= 0 and (f.is_symbol() or f.is_constant()) for f, m in expr.factor_list())
 
 
 @dump_args
@@ -97,46 +96,49 @@ def reduce_alg_data(A):
     while SR.zero() in E[0]:
         E[0].remove(SR.zero())
 
-    success = False
     for expr in E[0]:
+        if len(expr.factor_list()) > 1: # Temporary hack
+            continue
         variables = expr.variables()
         for a in variables:
+            # TODO: This does not work as expected, fix this
             sols = solve(expr, a, solution_dict=True)
             if len(sols) != 1:
                 continue
             sol = sols[0]
             lhs, rhs = list(sol.items())[0]
-            assert lhs == a
-            if is_monomial(rhs) and all(w in Q for w in rhs.variables()):
-                Q.remove(a)
+            # assert lhs == a
+            if not (is_monomial(rhs) and all(w in Q for w in rhs.variables())):
+                continue
+            # assert a not in rhs.variables()
 
-                E1_new = E[1]
-                if a in E[1]:
-                    if rhs == 0:
-                        return None
-                    E1_new.remove(a)
-                    for w in rhs.variables():
-                        E1_new.add(w)
+            if a in E[1]:
+                if rhs == 0:
+                    return None
+                E[1].remove(a)
+                for w in rhs.variables():
+                    E[1].add(w)
 
-                E0_new = []
-                for expr2 in E[0]:
-                    expr3 = simplify(expr2.subs(a==rhs))
-                    if expr3 != 0:
-                        E0_new.append(expr3)
+            E0_new = []
+            for expr2 in E[0]:
+                expr3 = simplify(expr2.subs(a==rhs))
+                if expr3 != 0:
+                    E0_new.append(expr3)
 
-                E = (E0_new, E1_new)
+            E = (E0_new, E[1])
+            Q.remove(a)
 
-                to_remove = []
-                for k in R:
-                    R[k] = simplify(R[k].subs(a==rhs))
-                    if R[k] == 0:
-                        to_remove.append(k)
-                for k in to_remove:
-                    del R[k]
+            to_remove = []
+            for k in R:
+                R[k] = simplify(R[k].subs(a==rhs))
+                if R[k] == 0:
+                    to_remove.append(k)
+            for k in to_remove:
+                del R[k]
 
-                return reduce_alg_data((Q, E, B, R))
+            return reduce_alg_data((Q, E, B, R))
 
-    return A
+    return (Q, E, B, R)
 
 
 @dump_args
@@ -147,42 +149,31 @@ def aggregate(*args):
 def general(A):
     Q, E, B, R = A
     if len(R) == 0:
-        if len(E[0]) == 0:
-            f = q^len(B) * (q-1)^len(E[1])
-            return [[f]]
-        else:
-            used_vars = set().union(*[set(expr.variables()) for expr in E[0]])
-            system = solve(E[0], tuple(used_vars), solution_dict=True)
-            if len(system) == 0:
-                return [[S.zero()]]
-            elif len(system) == 1:
-                system = system[0]
-                variables = set(v for expr in system.values() for v in expr.variables())
-                points = []
-                # Interpolate using first 10 primes, improve this
-                for p in Primes()[:10]:
-                    cnt = 0
+        used_vars = set().union(*[set(expr.variables()) for expr in E[0]])
+        used_vars_tup = tuple(used_vars)
+        solutions = solve(E[0], used_vars_tup, solution_dict=True)
 
-                    for pt in itertools.product(range(p), repeat=len(variables)):
-                        pair = {k: v for k, v in zip(variables, pt)}
-                        pair2 = {k: system[k].subs(pair) if k in system else pair[k] for k in used_vars}
-                        ok = True
-                        for expr in E[1]:
-                            if expr in used_vars and int(expr.subs(pair2)) % p == 0:
-                                ok = False
-                                break
-                        if ok:
-                            cnt += 1
-                    points.append((p, cnt))
+        poly_vals = []
+        # Interpolate using first 7 primes, improve this
+        for p in Primes()[:7]:
+            pts = set()
+            for system in solutions:
+                variables = list(set(v for expr in system.values() for v in expr.variables()))
 
-                f = q^len(B) * (q-1)^(len(Q)-len(used_vars)) * PolynomialRing(QQ, 'x').lagrange_polynomial(points)(q)
+                for pt in itertools.product(range(p), repeat=len(variables)):
+                    pair = {k: v for k, v in zip(variables, pt)}
+                    pair2 = tuple(int(system[k].subs(pair)) % p if k in system else pair[k] for k in used_vars_tup)
+                    if all(val != 0 for val, v in zip(pair2, used_vars_tup) if v in E[1]):
+                        pts.add(pair2)
 
-                return [[f]]
-            else:
-                return [[S.zero(), [Q, E, 0, len(B), 0]]]
+            poly_vals.append((p, len(pts)))
+
+        f = q^len(B) * (q-1)^(len(E[1].difference(used_vars))) * q^len(Q.difference(used_vars.union(E[1]))) * PolynomialRing(QQ, 'x').lagrange_polynomial(poly_vals)(q)
+        return [[f]]
+        # return [[S.zero(), [Q, E, 0, len(B), 0]]]
 
     z = B[-1]
-    assert all((u, z, v) not in R and (z, u, v) not in R for u in B for v in B)
+    # assert all((u, z, v) not in R and (z, u, v) not in R for u in B for v in B)
 
     B1 = B.copy()
     B1.remove(z)
@@ -198,7 +189,7 @@ def general(A):
 @dump_args
 def type_b(A, z):
     Q, E, B, R = A
-    assert z in B
+    # assert z in B
 
     def P(v1, v2, v3):
         if not (v1, v2, v3) in R:
@@ -226,7 +217,6 @@ def type_b(A, z):
 
     # Step 2
     for y in B:
-        #print(f"y={y}")
         if any(k[1] == y for k in R):
             continue
         if not any(k[0] == y and k[2] == z for k in R):
@@ -323,14 +313,12 @@ def type_b(A, z):
         for U in O[0][1:]:
             U[4] += 1
         for Oi in O[1:]:
-            #print(Oi)
             Oi[3] += 1
 
         return O
 
     # Step 3
     M = [v for v in B if all(k[0] != v and k[1] != v for k in R)]
-    #print(f"M={M}")
 
     y_best = None
     L_best = []
@@ -343,8 +331,7 @@ def type_b(A, z):
         if y_best is None and L or (z not in L_best and z in L) or (z in L_best and z in L and len(L) < len(L_best)):
             y_best = y
             L_best = L
-    #print(f"y={y_best}")
-    #print(f"L={L_best}")
+
     if y_best is not None:
         logging.info("┃ "*_depth + "Type B Step 3")
         y = y_best
@@ -417,4 +404,5 @@ if __name__ == "__main__":
             ans[k[1]] += v * q^k[0]
         for k, v in sorted(ans.items()):
             print(f"{k}: {v}")
+        print("Sum of squares =", sum(v * q^(2*k) for k, v in ans.items()))
         clear_vars()
