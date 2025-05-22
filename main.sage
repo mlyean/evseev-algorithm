@@ -149,28 +149,30 @@ def aggregate(*args):
 def general(A):
     Q, E, B, R = A
     if len(R) == 0:
-        used_vars = set().union(*[set(expr.variables()) for expr in E[0]])
-        used_vars_tup = tuple(used_vars)
-        solutions = solve(E[0], used_vars_tup, solution_dict=True)
+        try:
+            used_vars = set().union(*[set(expr.variables()) for expr in E[0]])
+            used_vars_tup = tuple(used_vars)
+            solutions = solve(E[0], used_vars_tup, solution_dict=True)
 
-        poly_vals = []
-        # Interpolate using first 7 primes, improve this
-        for p in Primes()[:7]:
-            pts = set()
-            for system in solutions:
-                variables = list(set(v for expr in system.values() for v in expr.variables()))
+            poly_vals = []
+            # Interpolate using first 7 primes, improve this
+            for p in Primes()[:7]:
+                pts = set()
+                for system in solutions:
+                    variables = list(set(v for expr in system.values() for v in expr.variables()))
 
-                for pt in itertools.product(range(p), repeat=len(variables)):
-                    pair = {k: v for k, v in zip(variables, pt)}
-                    pair2 = tuple(int(system[k].subs(pair)) % p if k in system else pair[k] for k in used_vars_tup)
-                    if all(val != 0 for val, v in zip(pair2, used_vars_tup) if v in E[1]):
-                        pts.add(pair2)
+                    for pt in itertools.product(range(p), repeat=len(variables)):
+                        pair = {k: v for k, v in zip(variables, pt)}
+                        pair2 = tuple(int(system[k].subs(pair)) % p if k in system else pair[k] for k in used_vars_tup)
+                        if all(val != 0 for val, v in zip(pair2, used_vars_tup) if v in E[1]):
+                            pts.add(pair2)
 
-            poly_vals.append((p, len(pts)))
+                poly_vals.append((p, len(pts)))
 
-        f = q^len(B) * (q-1)^(len(E[1].difference(used_vars))) * q^len(Q.difference(used_vars.union(E[1]))) * PolynomialRing(QQ, 'x').lagrange_polynomial(poly_vals)(q)
-        return [[f]]
-        # return [[S.zero(), [Q, E, 0, len(B), 0]]]
+            f = q^len(B) * (q-1)^(len(E[1].difference(used_vars))) * q^len(Q.difference(used_vars.union(E[1]))) * PolynomialRing(QQ, 'x').lagrange_polynomial(poly_vals)(q)
+            return [[f]]
+        except Exception:
+            return [[S.zero(), [Q, E, 0, len(B), 0]]]
 
     z = B[-1]
     # assert all((u, z, v) not in R and (z, u, v) not in R for u in B for v in B)
